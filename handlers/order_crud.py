@@ -44,7 +44,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.edit_text(
                 text=new_text,
                 parse_mode="HTML",
-                reply_markup=new_markup
+              
             )
             # 👇 Added: update channel too
             edit_message_in_channel(response, new_text, new_markup,get_order_buttons(response,channel_mode=True))
@@ -72,7 +72,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.edit_text(
                 text=new_text,
                 parse_mode="HTML",
-                reply_markup=new_markup
+       
             )
             # 👇 Added: update channel too
             edit_message_in_channel(response, new_text, get_order_buttons(response,channel_mode=True))
