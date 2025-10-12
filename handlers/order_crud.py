@@ -81,26 +81,31 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("⚠️ No changes made to approval status.")
 
     elif action == "delete":
-        # 1️⃣ Fetch order first before deleting in DB
+    # 1️⃣ Fetch order first
         order_data = get_order_by_id(order_id, telegram_id)
         if not order_data:
             await query.message.reply_text("❌ Order not found.")
             return ConversationHandler.END
 
-        # 2️⃣ Delete message from channel
-        delete_message_in_channel(order_data)
-
-        # 3️⃣ Delete the order from the DB
+        # 2️⃣ Delete from channel
+        
+        # 3️⃣ Try to delete from DB
         response = delete_order(order_id, telegram_id)
 
-        if response is not None:
+        if response and not response.get("error"):
             await query.message.edit_text(
                 text="🗑️ Order deleted successfully.",
                 parse_mode="HTML",
                 reply_markup=None
             )
+            delete_message_in_channel(order_data)
+
         else:
-            await query.message.reply_text("❌ Failed to delete order.")
+            if response.get("status_code") == 403:
+                await query.message.reply_text("🚫 Siz bu buyurtmani o‘chira olmaysiz.")
+            else:
+                await query.message.reply_text("❌ Failed to delete order.")
+
 
     # query = update.callback_query
     # await query.answer()

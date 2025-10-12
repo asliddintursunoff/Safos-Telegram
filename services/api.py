@@ -88,10 +88,13 @@ def delete_order(order_id: int, telegram_id: int):
         f"{API_URL}/orders/{order_id}",
         headers={"x-telegram-id": str(telegram_id)}
     )
-    try:
-        return response.json() if response.status_code == 200 else None
-    except ValueError:
-        return None
+    if response.status_code == 200:
+        try:
+            return response.json()
+        except ValueError:
+            return {}
+    return {"error": True, "status_code": response.status_code}
+
 
 
 def approve_order(order_id: int, telegram_id: int):
