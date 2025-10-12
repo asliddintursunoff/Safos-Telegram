@@ -1,0 +1,303 @@
+from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters
+from services.api import get_products, get_order_by_id, create_order, update_order, patch_update_order
+from handlers.main_menu import main_menu
+from keyboards.reply import back_button
+from keyboards.inline import get_order_buttons
+from formatter.order_post import format_order_message
+from services.chanel import sending_post
+from config import CHANEL_ID
+from services.chanel import edit_message_in_channel
+ASK_WHO, SELECT_PRODUCTS, ENTER_QUANTITY = range(3)
+
+# ================= Helper functions =================
+
+def build_product_keyboard(order, products):
+    keyboard = []
+    for p in products:
+        existing_qty = next((i['quantity'] for i in order['items'] if i['product_id'] == p['id']), 0)
+        keyboard.append([f"{p['name']} (qty: {existing_qty})"])
+    keyboard.append(["Done", "Cancel"])
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+
+async def send_order_message(update, context, order):
+    from formatter.order_post import format_order_message
+
+    message_text = format_order_message(order)
+
+    # 🧑 User message buttons (normal edit callback)
+    user_buttons = get_order_buttons(order) if "id" in order else None
+
+    # 📩 Send message to user
+    if user_buttons:
+        sent_msg = await update.message.reply_text(
+            message_text,
+            parse_mode="HTML",
+            reply_markup=user_buttons
+        )
+    else:
+        sent_msg = await update.message.reply_text(
+            message_text,
+            parse_mode="HTML"
+        )
+
+    # 📨 Send to channel with deep link buttons
+    channel_message_id = None
+    if "id" in order:
+        channel_buttons = get_order_buttons(order, channel_mode=True)  # deep link edit
+        ch_response = sending_post(message_text, channel_buttons)
+
+        if ch_response and "result" in ch_response:
+            channel_message_id = str(ch_response["result"]["message_id"])
+
+        # 🛠 Update order record with message IDs
+        patch_update_order(
+            order_id=order["id"],
+            telegram_id=update.effective_user.id,
+            order_data={
+                "user_chat_id": str(sent_msg.chat_id),
+                "user_message_id": str(sent_msg.message_id),
+                "channel_chat_id": str(CHANEL_ID) if channel_message_id else None,
+                "channel_message_id": channel_message_id
+            }
+        )
+
+    return sent_msg
+
+
+
+# ================= Order Start =================
+
+async def order_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    agent = context.user_data.get('agent')
+    if not agent:
+        await update.message.reply_text("Boshlash uchun /start ni bosing!")
+        return ConversationHandler.END
+    await update.message.reply_text("Zakas egasini yozing:")
+    return ASK_WHO
+
+# ================= Ask for Who =================
+import telegram
+async def ask_for_who(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if isinstance(update, Update) and update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        reply_target = query.message
+        user_id = query.from_user.id
+        is_editing = "edit_order_id" in context.user_data
+        for_who = context.user_data.get("order", {}).get("for_who", "")
+    elif isinstance(update, Update) and update.message:
+        reply_target = update.message
+        user_id = update.effective_user.id
+        is_editing = False
+        for_who = update.message.text
+    else:
+        # Fallback in case it's not a message or callback
+        return ConversationHandler.END
+
+    # NEW ORDER: reset order
+    if not is_editing:
+        context.user_data["order"] = {
+            "agent_id": context.user_data["agent"]["id"],
+            "for_who": for_who,
+            "items": []
+        }
+    else:
+        # Editing: keep existing items
+        context.user_data["order"]["for_who"] = for_who
+
+    # Fetch products
+    products = get_products(user_id)
+    context.user_data["products"] = products
+
+    keyboard = [[p["name"]] for p in products] + [["Done", "Cancel"]]
+    await reply_target.reply_text("Mahsulotni tanlang:", reply_markup=ReplyKeyboardMarkup(
+        keyboard, resize_keyboard=True, one_time_keyboard=False
+    ))
+    return SELECT_PRODUCTS
+
+
+# ================= Select Products =================
+def order_items_equal(db_items, new_items):
+    if len(db_items) != len(new_items):
+        return False
+
+    # Sort both lists by product id to avoid mismatch
+    db_sorted = sorted(db_items, key=lambda x: x["product"]["id"])
+    new_sorted = sorted(new_items, key=lambda x: x["product_id"])
+
+    for a, b in zip(db_sorted, new_sorted):
+        if a["product"]["id"] != b["product_id"] or a["quantity"] != b["quantity"]:
+            return False
+    return True
+
+async def select_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    order = context.user_data['order']
+    products = context.user_data['products']
+
+    if text == 'Cancel':
+        await update.message.reply_text('Order cancelled.')
+        context.user_data.pop('order', None)
+        context.user_data.pop('edit_order_id', None)
+        context.user_data.pop('edit_mode', None)
+        await main_menu(update, context)
+        return ConversationHandler.END
+
+    if text == "Done":
+        telegram_id = update.effective_user.id
+        order = context.user_data["order"]
+
+        # Remove zero quantity items
+        order["items"] = [i for i in order["items"] if i["quantity"] > 0]
+        if not order["items"]:
+            await update.message.reply_text("❌ Hech qanday mahsulot tanlanmadi!")
+            context.user_data.pop("order", None)
+            context.user_data.pop("edit_order_id", None)
+            await main_menu(update, context)
+            return ConversationHandler.END
+
+        if "edit_order_id" in context.user_data:
+            # Fetch the order from DB first
+            order_to_edit = get_order_by_id(context.user_data["edit_order_id"], telegram_id)
+            
+            if not order_to_edit:
+                await update.message.reply_text("❌ Order not found!")
+                context.user_data.pop("edit_order_id", None)
+                return ConversationHandler.END
+
+            if order_to_edit.get("is_delivered"):
+                await update.message.reply_text("⚠️ Bu zakaz allaqachon yetqazib berilgan.")
+                context.user_data.pop("edit_order_id", None)
+                context.user_data.pop("order", None)
+                return ConversationHandler.END
+            if order_items_equal(order_to_edit["items"], order["items"]):
+                await update.message.reply_text("ℹ️ Zakaz miqdori oldingisi bilan bir xil!.")
+                await main_menu(update,context)
+                return ConversationHandler.END 
+            # ✅ Safe to update
+            response = update_order(context.user_data["edit_order_id"], telegram_id, order)
+            
+            user_chat_id = int(response["user_chat_id"])
+            user_message_id = int(response["user_message_id"])
+            
+            await context.bot.edit_message_text(
+                chat_id=user_chat_id,
+                message_id=user_message_id,
+                text=format_order_message(response),
+                parse_mode="HTML",
+                reply_markup=get_order_buttons(response)
+            )
+
+            edit_message_in_channel(response, format_order_message(response), get_order_buttons(response,channel_mode=True))
+            context.user_data.pop("edit_order_id", None)
+
+
+
+        else:
+            # ✅ NEW order
+            response = create_order(order, telegram_id)
+            await send_order_message(update, context, response)
+
+        context.user_data.pop("order", None)
+        await main_menu(update, context)
+        return ConversationHandler.END
+
+
+
+
+
+    selected = next((p for p in products if text.startswith(p['name'])), None)
+    if not selected:
+        await update.message.reply_text('Invalid product. Select again.')
+        return SELECT_PRODUCTS
+
+    context.user_data['current_product'] = selected
+    await update.message.reply_text(f'✍️ {selected["name"]} sonini kiriting (0 to remove):', reply_markup=back_button)
+    return ENTER_QUANTITY
+
+# ================= Enter Quantity =================
+
+async def enter_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    order = context.user_data['order']
+    products = context.user_data['products']
+
+    if text == '⬅️ Back':
+        keyboard = build_product_keyboard(order, products)
+        await update.message.reply_text('🔙 Select another product:', reply_markup=keyboard)
+        return SELECT_PRODUCTS
+
+    if not text.isdigit():
+        await update.message.reply_text('⚠️ Quantity must be a number. Try again or press ⬅️ Back:')
+        return ENTER_QUANTITY
+
+    qty = int(text)
+    product = context.user_data.pop('current_product')
+
+    # Update only selected product
+    existing_item = next((i for i in order['items'] if i['product_id'] == product['id']), None)
+    if existing_item:
+        if qty == 0:
+            order['items'].remove(existing_item)
+        else:
+            existing_item['quantity'] = qty
+    elif qty > 0:
+        order['items'].append({'product_id': product['id'], 'quantity': qty})
+
+    keyboard = build_product_keyboard(order, products)
+    await update.message.reply_text(f'✅ Updated {product["name"]}. Select next product or Done:', reply_markup=keyboard)
+    return SELECT_PRODUCTS
+
+# ================= Conversation Handler =================
+
+buyurtma_handler = ConversationHandler(
+    entry_points=[MessageHandler(filters.TEXT & filters.Regex('^📝Buyurtma📝$'), order_start)],
+    states={
+        ASK_WHO: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_for_who)],
+        SELECT_PRODUCTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_products)],
+        ENTER_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_quantity)],
+    },
+    fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)],
+)
+
+# ================= Callback for Edit =================
+
+
+async def start_edit_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    order_id = int(query.data.split("_")[2])
+    order = get_order_by_id(order_id, query.from_user.id)
+    if not order:
+        await query.message.reply_text("❌ Order topilmadi!")
+        return ConversationHandler.END
+    if order.get("is_delivered"):
+        await query.message.reply_text("⚠️ This order has already been delivered and cannot be edited.")
+        return ConversationHandler.END
+
+
+    # Prefill context.user_data for editing
+    context.user_data["agent"] = {"id": order["agent"]["telegram_id"], **order["agent"]}
+    context.user_data["edit_order_id"] = order_id
+    context.user_data["order"] = {
+        "for_who": order["for_who"],
+        "items": [{"product_id": i["product"]["id"], "quantity": i["quantity"]} for i in order["items"]],
+    }
+
+    await query.message.reply_text(f"✏️ Edit products for order #{order_id}:")
+    # Start ASK_WHO state
+    return await ask_for_who(update, context)
+
+from telegram.ext import CallbackQueryHandler
+edit_order_handler = ConversationHandler(
+    entry_points=[CallbackQueryHandler(start_edit_order, pattern=r"^order_edit_\d+$")],
+    states={
+        ASK_WHO: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_for_who)],
+        SELECT_PRODUCTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_products)],
+        ENTER_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_quantity)],
+    },
+    fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)],
+    per_message=False,  # make sure callback query triggers the handler
+)
