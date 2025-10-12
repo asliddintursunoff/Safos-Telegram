@@ -47,7 +47,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=new_markup
             )
             # 👇 Added: update channel too
-            edit_message_in_channel(response, new_text, new_markup)
+            edit_message_in_channel(response, new_text, new_markup,get_order_buttons(response,channel_mode=True))
         else:
             logging.warning(f"No changes detected for order {order_id} delivery update.")
             await query.message.reply_text("⚠️ No changes made to delivery status.")
@@ -75,7 +75,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=new_markup
             )
             # 👇 Added: update channel too
-            edit_message_in_channel(response, new_text, new_markup)
+            edit_message_in_channel(response, new_text, get_order_buttons(response,channel_mode=True))
         else:
             logging.warning(f"No changes detected for order {order_id} approval update.")
             await query.message.reply_text("⚠️ No changes made to approval status.")
