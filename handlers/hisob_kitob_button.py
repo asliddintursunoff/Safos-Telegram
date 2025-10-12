@@ -36,6 +36,7 @@ async def hisob_kitob_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"💰 Bugungi zakazlaringizning jami narxi: <b>{total:,}</b> so'm",
             parse_mode="HTML"
         )
+        await main_menu(update, context)
         return ConversationHandler.END
 
     if text == "📆BELGILANGAN SANADAGI":
@@ -59,6 +60,7 @@ async def hisob_kitob_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"💰 Bugungi zakazlaringizning jami narxi: <b>{total:,}</b> so'm",
             parse_mode="HTML"
         )
+        await main_menu(update, context)
         return ConversationHandler.END
 
     
@@ -103,7 +105,7 @@ async def end_date_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     total = result.get("total_price", 0) if result else 0
     await update.message.reply_text(f"📊 Tanlangan davr bo‘yicha zakazlaringizning jami narxi: <b>{total:,}</b> so'm",parse_mode="HTML")
-
+    await main_menu(update, context)
     return ConversationHandler.END
 
 async def which_day_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -131,6 +133,7 @@ async def which_day_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📆 {date_text} sanasidagi zakazlaringizning jami narxi: <b>{total:,}</b> so'm",parse_mode="HTML"
     )
+    await main_menu(update, context)
     return ConversationHandler.END
 
 

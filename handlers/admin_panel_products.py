@@ -42,7 +42,7 @@ async def start_add_product(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if update.message.text == "Qo'shish":
         await update.message.reply_text(
             "Yangi mahsulot qo'shish uchun quyidagi ma'lumotlarni kiriting:\n"
-            "Nomi, narxi va o'lchov birligini vergul bilan ajratib yozing (masalan: Olma, 10000, kg):",
+            "Nomi, narxi va o'lchov birligini vergul bilan ajratib yozing <b>(masalan: Olma, 10000, kg):\nbirlik faqat dona va kg!,\b>",parse_mode="HTML",
             reply_markup=ReplyKeyboardRemove()
         )
         return ADD_PRODUCT
