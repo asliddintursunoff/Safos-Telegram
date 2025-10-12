@@ -24,21 +24,26 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_text = query.message.text_html
     current_markup = query.message.reply_markup
 
+    # ✅ Check if order exists once at the top (except for actions like "edit" if needed)
+    order_data = get_order_by_id(order_id, telegram_id)
+    if not order_data and action != "edit":  # allow edit to handle its own logic if needed
+        await query.message.reply_text("❌ Bu zakaz allaqachon o‘chirilgan!")
+        return ConversationHandler.END
+
     if action == "delivered":
         is_delivered = data[3] == "true"
         response = delivered_order(order_id, is_delivered, telegram_id)
         if not response:
             await query.message.reply_text("❌ Failed to update delivery status.")
             return ConversationHandler.END
-        
-        # Fetch the latest order
-        response = get_order_by_id(order_id, telegram_id)
-        if not response:
+
+        updated_order = get_order_by_id(order_id, telegram_id)
+        if not updated_order:
             await query.message.reply_text("❌ Failed to fetch updated order data.")
             return ConversationHandler.END
 
-        new_text = format_order_message(response)
-        new_markup = get_order_buttons(response)
+        new_text = format_order_message(updated_order)
+        new_markup = get_order_buttons(updated_order)
 
         if new_text != current_text or new_markup != current_markup:
             await query.message.edit_text(
@@ -46,27 +51,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
                 reply_markup=new_markup
             )
-            # 👇 Added: update channel too
-            edit_message_in_channel(response, new_text,get_order_buttons(response,channel_mode=True))
+            edit_message_in_channel(updated_order, new_text, get_order_buttons(updated_order, channel_mode=True))
         else:
             logging.warning(f"No changes detected for order {order_id} delivery update.")
             await query.message.reply_text("⚠️ No changes made to delivery status.")
 
     elif action == "approve":
         action_type = data[3]
-        response = (approve_order(order_id, telegram_id) if action_type == "approve"
+        response = (approve_order(order_id, telegram_id)
+                    if action_type == "approve"
                     else disapprove_order(order_id, telegram_id))
         if not response:
             await query.message.reply_text("❌ Failed to update approval status.")
             return ConversationHandler.END
-        
-        response = get_order_by_id(order_id, telegram_id)
-        if not response:
+
+        updated_order = get_order_by_id(order_id, telegram_id)
+        if not updated_order:
             await query.message.reply_text("❌ Failed to fetch updated order data.")
             return ConversationHandler.END
 
-        new_text = format_order_message(response)
-        new_markup = get_order_buttons(response)
+        new_text = format_order_message(updated_order)
+        new_markup = get_order_buttons(updated_order)
 
         if new_text != current_text or new_markup != current_markup:
             await query.message.edit_text(
@@ -74,22 +79,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
                 reply_markup=new_markup
             )
-            # 👇 Added: update channel too
-            edit_message_in_channel(response, new_text, get_order_buttons(response,channel_mode=True))
+            edit_message_in_channel(updated_order, new_text, get_order_buttons(updated_order, channel_mode=True))
         else:
             logging.warning(f"No changes detected for order {order_id} approval update.")
             await query.message.reply_text("⚠️ No changes made to approval status.")
 
     elif action == "delete":
-    # 1️⃣ Fetch order first
-        order_data = get_order_by_id(order_id, telegram_id)
-        if not order_data:
-            await query.message.reply_text("❌ Order not found.")
-            return ConversationHandler.END
-
-        # 2️⃣ Delete from channel
-        
-        # 3️⃣ Try to delete from DB
         response = delete_order(order_id, telegram_id)
 
         if response and not response.get("error"):
@@ -99,38 +94,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=None
             )
             delete_message_in_channel(order_data)
-
         else:
-            if response.get("status_code") == 403:
+            if response and response.get("status_code") == 403:
                 await query.message.reply_text("🚫 Siz bu buyurtmani o‘chira olmaysiz.")
             else:
                 await query.message.reply_text("❌ Failed to delete order.")
 
-
-    # query = update.callback_query
-    # await query.answer()
-    
-    # data = query.data  # e.g., "order_edit_123"
-    
-    # # split by '_'
-    # parts = data.split("_")
-    # action = parts[1]  # delivered / edit / approve / delete
-    # order_id = parts[2]  # id
-
-    if action == "edit":
+    elif action == "edit":
         order = get_order_by_id(order_id, update.effective_user.id)
         if not order:
             await query.message.reply_text("❌ Order not found!")
             return ConversationHandler.END
 
-        # STOP if delivered
         if order.get("is_delivered"):
             await query.message.reply_text(
                 "⚠️ This order has already been delivered and cannot be edited."
             )
-            return ConversationHandler.END  # immediately exit
+            return ConversationHandler.END
 
-        # Only safe to edit
         context.user_data["agent"] = {"id": order["agent"]["telegram_id"], **order["agent"]}
         context.user_data["edit_order_id"] = order_id
         context.user_data["order"] = {
@@ -143,7 +124,5 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.message.reply_text(f"✏️ Edit products for order #{order_id}:")
         await ask_for_who(update=update, context=context)
-
-
 
     return ConversationHandler.END
