@@ -55,7 +55,7 @@ async def agent_earnings_start(update: Update, context: ContextTypes.DEFAULT_TYP
     buttons = [
         ["📆 Bugun", "📅 Sana"],
         ["📊 Oraliqdagi sana"],
-        ["⬅️ Ortga"]
+        ["⬅️ Admin menyu"]
     ]
     await update.message.reply_text(
         "💵 Agent daromadlarini qaysi oraliq bo‘yicha ko‘rasiz?",
@@ -68,8 +68,9 @@ async def agent_earnings_start(update: Update, context: ContextTypes.DEFAULT_TYP
 async def agent_earnings_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
-    if text == "⬅️ Ortga":
-        return await admin_menu(update, context)
+    if text == "⬅️ Admin menyu":
+        return await agent_earnings_go_back(update, context)
+
 
     if text == "📆 Bugun":
         data = get_agent_earnings_today(update.effective_user.id)
@@ -80,7 +81,7 @@ async def agent_earnings_action(update: Update, context: ContextTypes.DEFAULT_TY
         buttons = [
             ["📆 Bugun", "📅 Sana"],
             ["📊 Oraliqdagi sana"],
-            ["⬅️ Ortga"]
+            ["⬅️ Admin menyu"]
         ]
         await update.message.reply_text(
             "💵 Yana biror oraliqni tanlang:",
@@ -109,7 +110,7 @@ async def agent_earnings_by_date(update, context):
     buttons = [
         ["📆 Bugun", "📅 Sana"],
         ["📊 Oraliqdagi sana"],
-        ["⬅️ Ortga"]
+        ["⬅️ Admin menyu"]
     ]
     await update.message.reply_text(
         "💵 Yana biror oraliqni tanlang:",
@@ -138,7 +139,7 @@ async def agent_earnings_end_date(update: Update, context: ContextTypes.DEFAULT_
     buttons = [
         ["📆 Bugun", "📅 Sana"],
         ["📊 Oraliqdagi sana"],
-        ["⬅️ Ortga"]
+        ["⬅️ Admin menyu"]
     ]
     await update.message.reply_text(
         "💵 Yana biror oraliqni tanlang:",
@@ -160,10 +161,18 @@ def format_earnings_message(data, title):
     return "\n".join(lines)
 
 from .main_menu import main_menu
+from telegram import ReplyKeyboardRemove
+
 async def agent_earnings_go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔙 Bosh menyuga qaytdingiz.")
-    await main_menu(update, context)
+    # Remove keyboard so no other handler is accidentally triggered
+    await update.message.reply_text("🔙 Bosh menyuga qaytdingiz.", reply_markup=ReplyKeyboardRemove())
+
+    # Go to main menu
+    await admin_menu(update, context)
+
+    # End the conversation explicitly
     return ConversationHandler.END
+
 
 # 👉 Conversation handler
 agent_earnings_conv_handler = ConversationHandler(
@@ -174,6 +183,6 @@ agent_earnings_conv_handler = ConversationHandler(
         AGENT_EARNINGS_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, agent_earnings_start_date)],
         AGENT_EARNINGS_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, agent_earnings_end_date)],
     },
-    fallbacks=[MessageHandler(filters.Regex("^⬅️ Ortga$"), agent_earnings_go_back)],
+    fallbacks=[MessageHandler(filters.Regex("^⬅️ Admin menyu$"), agent_earnings_go_back)],  # ✅ changed here
     allow_reentry=True
 )

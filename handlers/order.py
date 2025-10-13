@@ -105,7 +105,7 @@ async def order_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ASK_WHO
 
 # ================= Ask for Who =================
-import telegram
+
 async def ask_for_who(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if isinstance(update, Update) and update.callback_query:
         query = update.callback_query
@@ -120,10 +120,9 @@ async def ask_for_who(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_editing = False
         for_who = update.message.text
     else:
-        # Fallback in case it's not a message or callback
         return ConversationHandler.END
 
-    # NEW ORDER: reset order
+    # 🆕 Initialize or update the order in context
     if not is_editing:
         context.user_data["order"] = {
             "agent_id": context.user_data["agent"]["id"],
@@ -131,18 +130,23 @@ async def ask_for_who(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "items": []
         }
     else:
-        # Editing: keep existing items
         context.user_data["order"]["for_who"] = for_who
 
-    # Fetch products
+    # 📦 Fetch products
     products = get_products(user_id)
     context.user_data["products"] = products
 
-    keyboard = [[p["name"]] for p in products] + [["Done", "Cancel"]]
-    await reply_target.reply_text("Mahsulotni tanlang:", reply_markup=ReplyKeyboardMarkup(
-        keyboard, resize_keyboard=True, one_time_keyboard=False
-    ))
+    # 🧾 Build the nice 2-column product keyboard with quantities
+    order = context.user_data["order"]
+    product_keyboard = build_product_keyboard(order, products)
+
+    # 💬 Send product selection message
+    await reply_target.reply_text(
+        "📦 Mahsulotni tanlang:",
+        reply_markup=product_keyboard
+    )
     return SELECT_PRODUCTS
+
 
 
 # ================= Select Products =================

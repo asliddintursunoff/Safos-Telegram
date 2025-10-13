@@ -1,5 +1,5 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
+from formatter.printer_check import get_order_print_url
 def get_order_buttons(order, channel_mode=False):
     is_delivered = order.get("is_delivered", False)
     is_approved = order.get("is_approved", False)
@@ -19,7 +19,8 @@ def get_order_buttons(order, channel_mode=False):
             "✏️Tahrirlash",
             callback_data=f"order_edit_{order['id']}"
         )
-
+    print_url = get_order_print_url(order)
+    print_button = InlineKeyboardButton("🖨 Print", url=print_url)
     buttons = [
         [
             InlineKeyboardButton(
@@ -37,6 +38,7 @@ def get_order_buttons(order, channel_mode=False):
                 "🗑️O'chirish",
                 callback_data=f"order_delete_{order['id']}"
             ),
-        ]
+        ],
+         [print_button]
     ]
     return InlineKeyboardMarkup(buttons)
