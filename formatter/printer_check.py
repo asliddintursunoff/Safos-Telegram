@@ -88,10 +88,14 @@ def get_order_print_url(order):
     lines.append(bold_on + f"{'Jami:':<{name_w+price_w+qty_w}}{total_str:>{sum_w}}\n" + bold_off)
 
     # ===== SIGN LINE =====
+    # ===== SIGN LINE =====
     lines.append("\n")
     lines.append("\n")
-    sign_line = "imzo:  " + "█" * (line_width - len("imzo:  "))
+    # reduce 5 chars to avoid cutting at the edge
+    sign_length = line_width - len("IMZO: ") - 5
+    sign_line = "IMZO: " + "█" * sign_length
     lines.append(sign_line + "\n")
+
 
     # ===== FOOTER =====
     lines.append(center + bold_on + "Rahmat! Yana kutib qolamiz!\n" + bold_off)
