@@ -183,7 +183,7 @@ def get_products(telegram_id: int):
 
 def creating_product(telegram_id:int,name:str,price:float,unit:str):
     response = requests.post(
-        f"{API_URL}/products/create/",
+        f"{API_URL}/products/create",
         headers={"x-telegram-id": str(telegram_id)},
         json={"name": name,
               "price":int(price),
