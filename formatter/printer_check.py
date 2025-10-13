@@ -92,7 +92,7 @@ def get_order_print_url(order):
     lines.append("\n")
     sign_line = "IMZO:  "
     lines.append(sign_line + "\n")
-    lines.append("       "+"█" * line_width-len(sign_line))
+    lines.append("       "+"█" * (line_width-len(sign_line)))
 
     # ===== FOOTER =====
     lines.append(center + bold_on + "Rahmat! Yana kutib qolamiz!\n" + bold_off)
