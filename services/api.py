@@ -186,8 +186,8 @@ def creating_product(telegram_id:int,name:str,price:float,unit:str):
         f"{API_URL}/products/create/",
         headers={"x-telegram-id": str(telegram_id)},
         json={"name": name,
-              "price":price,
-              "unit":unit}
+              "price":int(price),
+              "unit":unit.strip().lower()}
     )
     return response.json() if response.status_code == 200 else None
     
