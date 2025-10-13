@@ -12,13 +12,37 @@ ASK_WHO, SELECT_PRODUCTS, ENTER_QUANTITY = range(3)
 
 # ================= Helper functions =================
 
+
+async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await main_menu(update, context)
+    return ConversationHandler.END
+
 def build_product_keyboard(order, products):
     keyboard = []
+    row = []
+
     for p in products:
-        existing_qty = next((i['quantity'] for i in order['items'] if i['product_id'] == p['id']), 0)
-        keyboard.append([f"{p['name']} (qty: {existing_qty})"])
+        existing_qty = next(
+            (i['quantity'] for i in order['items'] if i['product_id'] == p['id']),
+            0
+        )
+        button_text = f"{p['name']} (soni: {existing_qty})"
+        row.append(button_text)
+
+        # If we have 2 buttons in this row, add it to keyboard and reset
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+
+    # If there's an odd number of products, add the last row too
+    if row:
+        keyboard.append(row)
+
+    # Add the bottom action row
     keyboard.append(["Done", "Cancel"])
+
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+
 
 async def send_order_message(update, context, order):
     from formatter.order_post import format_order_message
@@ -73,7 +97,11 @@ async def order_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not agent:
         await update.message.reply_text("Boshlash uchun /start ni bosing!")
         return ConversationHandler.END
-    await update.message.reply_text("Zakas egasini yozing:")
+
+    keyboard = [["⬅️ Back"]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+    await update.message.reply_text("Zakas egasini yozing:", reply_markup=reply_markup)
     return ASK_WHO
 
 # ================= Ask for Who =================
@@ -137,7 +165,7 @@ async def select_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     products = context.user_data['products']
 
     if text == 'Cancel':
-        await update.message.reply_text('Order cancelled.')
+        await update.message.reply_text('Zakaz bekor qilindi.')
         context.user_data.pop('order', None)
         context.user_data.pop('edit_order_id', None)
         context.user_data.pop('edit_mode', None)
@@ -162,7 +190,7 @@ async def select_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
             order_to_edit = get_order_by_id(context.user_data["edit_order_id"], telegram_id)
             
             if not order_to_edit:
-                await update.message.reply_text("❌ Order not found!")
+                await update.message.reply_text("❌ Zakas topilmadi yoki o'chirib yuborilgan!")
                 context.user_data.pop("edit_order_id", None)
                 return ConversationHandler.END
 
@@ -209,11 +237,11 @@ async def select_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     selected = next((p for p in products if text.startswith(p['name'])), None)
     if not selected:
-        await update.message.reply_text('Invalid product. Select again.')
+        await update.message.reply_text('Noto\'g\'ri mahsulot tanlandi. Iltimos tugmalardan birini bosing!')
         return SELECT_PRODUCTS
 
     context.user_data['current_product'] = selected
-    await update.message.reply_text(f'✍️ {selected["name"]} sonini kiriting (0 to remove):', reply_markup=back_button)
+    await update.message.reply_text(f'✍️ {selected["name"]} sonini kiriting (mahsulot bo\'masa 0 ni yozing):', reply_markup=back_button)
     return ENTER_QUANTITY
 
 # ================= Enter Quantity =================
@@ -225,11 +253,11 @@ async def enter_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == '⬅️ Back':
         keyboard = build_product_keyboard(order, products)
-        await update.message.reply_text('🔙 Select another product:', reply_markup=keyboard)
+        await update.message.reply_text('🔙 Boshqa mahsulotni tanlang:', reply_markup=keyboard)
         return SELECT_PRODUCTS
 
     if not text.isdigit():
-        await update.message.reply_text('⚠️ Quantity must be a number. Try again or press ⬅️ Back:')
+        await update.message.reply_text('⚠️ Mahsulot soni raqam bo\'lishi kerak!!!. Qaytadan o\'rining yoki orqaga qaytish uchun  ⬅️ Ortga tugmasini bosing!:')
         return ENTER_QUANTITY
 
     qty = int(text)
@@ -246,19 +274,39 @@ async def enter_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order['items'].append({'product_id': product['id'], 'quantity': qty})
 
     keyboard = build_product_keyboard(order, products)
-    await update.message.reply_text(f'✅ Updated {product["name"]}. Select next product or Done:', reply_markup=keyboard)
+    await update.message.reply_text(f'✅ {product["name"]} soni yangilandi!.\nKeyingi mahsulotni tanlang! \n<b>Tugatish uchun Done tugmasini bosing!</b>:', parse_mode="HTML",reply_markup=keyboard)
     return SELECT_PRODUCTS
 
 # ================= Conversation Handler =================
 
+# buyurtma_handler = ConversationHandler(
+#     entry_points=[MessageHandler(filters.TEXT & filters.Regex('^📝Buyurtma📝$'), order_start)],
+#     states={
+#         ASK_WHO: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_for_who)],
+#         SELECT_PRODUCTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_products)],
+#         ENTER_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_quantity)],
+#     },
+#     fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)],
+# )
 buyurtma_handler = ConversationHandler(
     entry_points=[MessageHandler(filters.TEXT & filters.Regex('^📝Buyurtma📝$'), order_start)],
     states={
-        ASK_WHO: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_for_who)],
-        SELECT_PRODUCTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_products)],
-        ENTER_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_quantity)],
+        ASK_WHO: [
+            MessageHandler(filters.TEXT & filters.Regex("^⬅️ Back$"), back_to_main),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, ask_for_who),
+        ],
+        SELECT_PRODUCTS: [
+            MessageHandler(filters.TEXT & filters.Regex("^⬅️ Back$"), back_to_main),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, select_products),
+        ],
+        ENTER_QUANTITY: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, enter_quantity),
+        ],
     },
-    fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)],
+    fallbacks=[
+        CommandHandler('cancel', lambda u, c: ConversationHandler.END),
+        MessageHandler(filters.Regex("^⬅️ Back$"), back_to_main)
+    ],
 )
 
 # ================= Callback for Edit =================
@@ -271,10 +319,10 @@ async def start_edit_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     order_id = int(query.data.split("_")[2])
     order = get_order_by_id(order_id, query.from_user.id)
     if not order:
-        await query.message.reply_text("❌ Order topilmadi!")
+        await query.message.reply_text("❌ Zakaz o'chirib yuborilgan yoki mavjud emas!")
         return ConversationHandler.END
     if order.get("is_delivered"):
-        await query.message.reply_text("⚠️ This order has already been delivered and cannot be edited.")
+        await query.message.reply_text("⚠️ Bu zakaz yetqazib berilgan!\nZakazni o'zgartirib bo'lmaydi!")
         return ConversationHandler.END
 
 
@@ -286,7 +334,7 @@ async def start_edit_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "items": [{"product_id": i["product"]["id"], "quantity": i["quantity"]} for i in order["items"]],
     }
 
-    await query.message.reply_text(f"✏️ Edit products for order #{order_id}:")
+    await query.message.reply_text(f"✏️ {order_id} Sonli zakazni o'zgartirishga kirdingiz:")
     # Start ASK_WHO state
     return await ask_for_who(update, context)
 

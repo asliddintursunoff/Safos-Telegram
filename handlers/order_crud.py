@@ -34,12 +34,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_delivered = data[3] == "true"
         response = delivered_order(order_id, is_delivered, telegram_id)
         if not response:
-            await query.message.reply_text("❌ Failed to update delivery status.")
+            await query.message.reply_text("❌ Faqat admin va dostavchik bu funksiyani bajara oladi!")
             return ConversationHandler.END
 
         updated_order = get_order_by_id(order_id, telegram_id)
         if not updated_order:
-            await query.message.reply_text("❌ Failed to fetch updated order data.")
+            await query.message.reply_text("❌ Bu zakaz allaqachon o‘chirilgan!")
             return ConversationHandler.END
 
         new_text = format_order_message(updated_order)
@@ -53,8 +53,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             edit_message_in_channel(updated_order, new_text, get_order_buttons(updated_order, channel_mode=True))
         else:
-            logging.warning(f"No changes detected for order {order_id} delivery update.")
-            await query.message.reply_text("⚠️ No changes made to delivery status.")
+            logging.warning(f"{order_id} raqamli zakaz uchun hech qanday o'zgaritish bo'lmadi.")
+            await query.message.reply_text("⚠️ zakaz uchun hech qanday o'zgaritish bo'lmadi.")
 
     elif action == "approve":
         action_type = data[3]
@@ -62,12 +62,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if action_type == "approve"
                     else disapprove_order(order_id, telegram_id))
         if not response:
-            await query.message.reply_text("❌ Failed to update approval status.")
+            await query.message.reply_text("❌ Faqat admin va dostavchik bu funksiyani bajara oladi!.")
             return ConversationHandler.END
 
         updated_order = get_order_by_id(order_id, telegram_id)
         if not updated_order:
-            await query.message.reply_text("❌ Failed to fetch updated order data.")
+            await query.message.reply_text("❌ Bu zakaz allaqachon o‘chirilgan!")
             return ConversationHandler.END
 
         new_text = format_order_message(updated_order)
@@ -81,15 +81,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             edit_message_in_channel(updated_order, new_text, get_order_buttons(updated_order, channel_mode=True))
         else:
-            logging.warning(f"No changes detected for order {order_id} approval update.")
-            await query.message.reply_text("⚠️ No changes made to approval status.")
+            logging.warning(f"{order_id} raqamli zakaz uchun hech qanday o'zgaritish bo'lmadi.")
+            await query.message.reply_text("⚠️ zakaz uchun hech qanday o'zgaritish bo'lmadi.")
 
     elif action == "delete":
         response = delete_order(order_id, telegram_id)
 
         if response and not response.get("error"):
             await query.message.edit_text(
-                text="🗑️ Order deleted successfully.",
+                text="🗑️ Zakaz muvaffaqqiyatli o'chirildi.",
                 parse_mode="HTML",
                 reply_markup=None
             )
@@ -98,17 +98,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if response and response.get("status_code") == 403:
                 await query.message.reply_text("🚫 Siz bu buyurtmani o‘chira olmaysiz.")
             else:
-                await query.message.reply_text("❌ Failed to delete order.")
+                await query.message.reply_text("❌Tizimda xatolik zakaz o'chirilmadi.")
 
     elif action == "edit":
         order = get_order_by_id(order_id, update.effective_user.id)
         if not order:
-            await query.message.reply_text("❌ Order not found!")
+            await query.message.reply_text("❌ Zakaz mavjud emas yoki allaqachon o'chirib yuborilgan")
             return ConversationHandler.END
 
         if order.get("is_delivered"):
             await query.message.reply_text(
-                "⚠️ This order has already been delivered and cannot be edited."
+                "⚠️ Bu zakaz allaqachon yetqazib berilgan,buni o'zgartirib bo'lmaydi"
             )
             return ConversationHandler.END
 
