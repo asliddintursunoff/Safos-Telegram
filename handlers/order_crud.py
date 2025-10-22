@@ -33,8 +33,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "delivered":
         is_delivered = data[3] == "true"
         response = delivered_order(order_id, is_delivered, telegram_id)
-        if not response:
+        if response and response.get("status_code") == 403:
             await query.message.reply_text("❌ Faqat admin va dostavchik bu funksiyani bajara oladi!")
+            return ConversationHandler.END
+        if response and response.get("status_code") == 400:
+            await query.message.reply_text("❌ Bu zakaz tasdiqlanmagan!")
             return ConversationHandler.END
 
         updated_order = get_order_by_id(order_id, telegram_id)

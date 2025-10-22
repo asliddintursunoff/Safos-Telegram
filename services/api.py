@@ -117,10 +117,12 @@ def delivered_order(order_id: int, is_delivered: bool, telegram_id: int):
         headers={"x-telegram-id": str(telegram_id)},
         params={"is_delivered": str(is_delivered).lower()}
     )
-    return response.json() if response.status_code == 200 else None
-
-    
-
+    if response.status_code == 200:
+        try:
+            return response.json()
+        except ValueError:
+            return {}
+    return {"error": True, "status_code": response.status_code}
 
 
 def getting_my_orders_price(
