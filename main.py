@@ -17,7 +17,7 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.CONTACT, recieve_contact))
 app.add_handler(buyurtma_handler)
 app.add_handler(edit_order_handler)
-app.add_handler(CallbackQueryHandler(callback_handler, pattern="^order_"))
+app.add_handler(CallbackQueryHandler(callback_handler, pattern="^order_"), group=1)
 app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^🧮Hisob-Kitob$"), hisob_kitob_menu))
 app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^👤Admin👤$"), admin_menu))
 

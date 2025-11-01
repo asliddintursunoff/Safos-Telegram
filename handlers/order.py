@@ -162,11 +162,30 @@ def order_items_equal(db_items, new_items):
         if a["product"]["id"] != b["product_id"] or a["quantity"] != b["quantity"]:
             return False
     return True
-
+import logging as logger
 async def select_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    order = context.user_data['order']
-    products = context.user_data['products']
+    # Log incoming update and user
+    user_id = update.effective_user.id if update.effective_user else None
+    text = update.message.text if update.message else None
+    logger.info("select_products called by user=%s text=%r context_keys=%s", user_id, text, list(context.user_data.keys()))
+
+    # Defensive checks: ensure order and products exist
+    order = context.user_data.get('order')
+    products = context.user_data.get('products')
+
+    if order is None:
+        logger.warning("select_products: missing context.user_data['order'] for user=%s", user_id)
+        await update.message.reply_text("❌ Ichki xatolik: zakaz ma'lumotlari yo'q. Iltimos /start ni bosing va qaytadan urinib ko'ring.")
+        return ConversationHandler.END
+
+    if products is None:
+        logger.warning("select_products: missing context.user_data['products'], fetching fresh for user=%s", user_id)
+        # try to fetch products again as fallback
+        products = get_products(user_id)
+        if not products:
+            await update.message.reply_text("❌ Mahsulotlar olinmadi. Iltimos keyinroq urinib ko'ring.")
+            return ConversationHandler.END
+        context.user_data['products'] = products
 
     if text == 'Cancel':
         await update.message.reply_text('Zakaz bekor qilindi.')
@@ -189,6 +208,7 @@ async def select_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await main_menu(update, context)
             return ConversationHandler.END
 
+        # --- replace the existing "if 'edit_order_id' in context.user_data" block ---
         if "edit_order_id" in context.user_data:
             # Fetch the order from DB first
             order_to_edit = get_order_by_id(context.user_data["edit_order_id"], telegram_id)
@@ -203,25 +223,52 @@ async def select_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data.pop("edit_order_id", None)
                 context.user_data.pop("order", None)
                 return ConversationHandler.END
+
             if order_items_equal(order_to_edit["items"], order["items"]):
                 await update.message.reply_text("ℹ️ Zakaz miqdori oldingisi bilan bir xil!.")
-                await main_menu(update,context)
-                return ConversationHandler.END 
+                await main_menu(update, context)
+                return ConversationHandler.END
+
             # ✅ Safe to update
             response = update_order(context.user_data["edit_order_id"], telegram_id, order)
-            
-            user_chat_id = int(response["user_chat_id"])
-            user_message_id = int(response["user_message_id"])
-            
-            await context.bot.edit_message_text(
-                chat_id=user_chat_id,
-                message_id=user_message_id,
-                text=format_order_message(response),
-                parse_mode="HTML",
-                reply_markup=get_order_buttons(response)
-            )
 
-            edit_message_in_channel(response, format_order_message(response), get_order_buttons(response,channel_mode=True))
+            # Defensive checks: ensure we got a valid response with IDs
+            if not response:
+                logger.error("update_order returned None for order=%s user=%s", context.user_data["edit_order_id"], telegram_id)
+                await update.message.reply_text("❌ Serverga ulanishda xatolik yuz berdi. Iltimos keyinroq urinib ko'ring.")
+                return ConversationHandler.END
+
+            user_chat_id = response.get("user_chat_id")
+            user_message_id = response.get("user_message_id")
+
+            if not user_chat_id or not user_message_id:
+                logger.error("update_order response missing message ids: %s", response)
+                await update.message.reply_text("❌ Serverdan noto'g'ri javob olindi (message ids yo'q).")
+                return ConversationHandler.END
+
+            try:
+                user_chat_id = int(user_chat_id)
+                user_message_id = int(user_message_id)
+            except (TypeError, ValueError):
+                logger.exception("Invalid message ids returned by update_order: %s", response)
+                await update.message.reply_text("❌ Serverdan noto'g'ri javob olindi (message ids format xato).")
+                return ConversationHandler.END
+
+            # Edit the user's message safely
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=user_chat_id,
+                    message_id=user_message_id,
+                    text=format_order_message(response),
+                    parse_mode="HTML",
+                    reply_markup=get_order_buttons(response)
+                )
+            except Exception:
+                logger.exception("Failed to edit user message for order %s", context.user_data["edit_order_id"])
+                await update.message.reply_text("❌ Xabarni yangilashda xatolik yuz berdi.")
+                return ConversationHandler.END
+
+            edit_message_in_channel(response, format_order_message(response), get_order_buttons(response, channel_mode=True))
             context.user_data.pop("edit_order_id", None)
 
 
@@ -311,14 +358,16 @@ buyurtma_handler = ConversationHandler(
         CommandHandler('cancel', lambda u, c: ConversationHandler.END),
         MessageHandler(filters.Regex("^⬅️ Back$"), back_to_main)
     ],
+    per_user=True
 )
 
 # ================= Callback for Edit =================
 
-
 async def start_edit_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    logger.info("start_edit_order called by user=%s data=%r", query.from_user.id if query.from_user else None, query.data)
 
     order_id = int(query.data.split("_")[2])
     order = get_order_by_id(order_id, query.from_user.id)
@@ -329,7 +378,6 @@ async def start_edit_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("⚠️ Bu zakaz yetqazib berilgan!\nZakazni o'zgartirib bo'lmaydi!")
         return ConversationHandler.END
 
-
     # Prefill context.user_data for editing
     context.user_data["agent"] = {"id": order["agent"]["telegram_id"], **order["agent"]}
     context.user_data["edit_order_id"] = order_id
@@ -338,9 +386,12 @@ async def start_edit_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "items": [{"product_id": i["product"]["id"], "quantity": i["quantity"]} for i in order["items"]],
     }
 
+    logger.info("start_edit_order populated context.user_data for user=%s edit_order_id=%s", query.from_user.id, order_id)
+
     await query.message.reply_text(f"✏️ {order_id} Sonli zakazni o'zgartirishga kirdingiz:")
-    # Start ASK_WHO state
+    # Start ASK_WHO state -- this will call ask_for_who which sets products and sends keyboard
     return await ask_for_who(update, context)
+
 
 from telegram.ext import CallbackQueryHandler
 edit_order_handler = ConversationHandler(
@@ -351,5 +402,8 @@ edit_order_handler = ConversationHandler(
         ENTER_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_quantity)],
     },
     fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)],
-    per_message=False,  # make sure callback query triggers the handler
+    per_user=True,
+    per_message=True
+    
+      # make sure callback query triggers the handler
 )
