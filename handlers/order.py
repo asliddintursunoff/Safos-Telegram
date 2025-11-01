@@ -362,23 +362,54 @@ buyurtma_handler = ConversationHandler(
 )
 
 # ================= Callback for Edit =================
-
 async def start_edit_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    logger.info("start_edit_order called by user=%s data=%r", query.from_user.id if query.from_user else None, query.data)
+    # parse callback parts: order_edit_<order_id> or order_edit_<order_id>_<owner_id>
+    parts = query.data.split("_")
+    if len(parts) < 3:
+        await query.message.reply_text("❌ Noto'g'ri tugma ma'lumotlari.")
+        return ConversationHandler.END
 
-    order_id = int(query.data.split("_")[2])
-    order = get_order_by_id(order_id, query.from_user.id)
+    try:
+        order_id = int(parts[2])
+    except ValueError:
+        await query.message.reply_text("❌ Noto'g'ri zakaz ID.")
+        return ConversationHandler.END
+
+    # optional owner id in parts[3]
+    owner_id = None
+    if len(parts) >= 4 and parts[3].isdigit():
+        owner_id = int(parts[3])
+
+    logger.info("start_edit_order called by user=%s order=%s owner=%s data=%r",
+                query.from_user.id if query.from_user else None,
+                order_id, owner_id, query.data)
+
+    # If owner_id is present and clicker isn't owner, attempt to fetch order as clicker (permission check)
+    clicker_id = query.from_user.id
+    if owner_id is not None and clicker_id != owner_id:
+        # backend will return None or error if clicker isn't allowed
+        allowed_order = get_order_by_id(order_id, clicker_id)
+        if not allowed_order:
+            await query.answer("🚫 Sizda bu zakazni tahrirlash huquqi yo'q.", show_alert=True)
+            return ConversationHandler.END
+        order = allowed_order
+    else:
+        # fetch by owner (owner_id) or clicker (if owner_id missing)
+        fetch_id = owner_id if owner_id is not None else clicker_id
+        order = get_order_by_id(order_id, fetch_id)
+
     if not order:
-        await query.message.reply_text("❌ Zakaz o'chirib yuborilgan yoki mavjud emas!")
-        return ConversationHandler.END
-    if order.get("is_delivered"):
-        await query.message.reply_text("⚠️ Bu zakaz yetqazib berilgan!\nZakazni o'zgartirib bo'lmaydi!")
+        await query.message.reply_text("❌ Zakaz mavjud emas yoki o'chirilgan!")
         return ConversationHandler.END
 
-    # Prefill context.user_data for editing
+    if order.get("is_delivered"):
+        await query.message.reply_text("⚠️ Bu zakaz yetqazib berilgan va tahrir qilib bo'lmaydi!")
+        return ConversationHandler.END
+
+    # Prefill context.user_data for editing (safe now — clicker is authorized)
     context.user_data["agent"] = {"id": order["agent"]["telegram_id"], **order["agent"]}
     context.user_data["edit_order_id"] = order_id
     context.user_data["order"] = {
@@ -386,16 +417,18 @@ async def start_edit_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "items": [{"product_id": i["product"]["id"], "quantity": i["quantity"]} for i in order["items"]],
     }
 
-    logger.info("start_edit_order populated context.user_data for user=%s edit_order_id=%s", query.from_user.id, order_id)
+    logger.info("start_edit_order populated context for user=%s edit_order_id=%s", clicker_id, order_id)
 
     await query.message.reply_text(f"✏️ {order_id} Sonli zakazni o'zgartirishga kirdingiz:")
-    # Start ASK_WHO state -- this will call ask_for_who which sets products and sends keyboard
+    # Start ASK_WHO state which will send product keyboard
     return await ask_for_who(update, context)
 
 
+
 from telegram.ext import CallbackQueryHandler
+
 edit_order_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(start_edit_order, pattern=r"^order_edit_\d+$")],
+    entry_points=[CallbackQueryHandler(start_edit_order, pattern=r"^order_edit_\d+(_\d+)?$")],
     states={
         ASK_WHO: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_for_who)],
         SELECT_PRODUCTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_products)],
@@ -403,7 +436,5 @@ edit_order_handler = ConversationHandler(
     },
     fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)],
     per_user=True,
-    per_message=True
-    
-      # make sure callback query triggers the handler
+    # <- DO NOT set per_message=True here because states include MessageHandler
 )
