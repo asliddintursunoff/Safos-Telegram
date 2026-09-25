@@ -36,15 +36,20 @@ async def show_existing_orders(update: Update, context: ContextTypes.DEFAULT_TYP
         if index % 20 == 19:
             await asyncio.sleep(1)  # stay under Telegram's flood limits for long lists
 
+    # total money of all listed orders
+    total_money = sum(float(order.get("get_total_price") or 0) for order in orders)
+    total_line = f"\n💰 <b>Jami summa ({len(orders)} ta zakaz):</b> {total_money:,.0f} so'm"
+
     orders_quantity_json = calculating_new_orders_quantity()
     if not isinstance(orders_quantity_json, dict):
-        await update.effective_message.reply_text("Tizimda muammo bor!, Hisoblashda adashdim!")
+        await update.effective_message.reply_text("Tizimda muammo bor!, Hisoblashda adashdim!" + total_line, parse_mode="HTML")
     else:
         message_for_orders_quantity = "Mavjud zakaslar soni:\n"
         for key,value in orders_quantity_json.items():
             message_for_orders_quantity+= f"<b>{escape(str(key))}</b> -- {escape(str(value))}\n"
 
-        await update.effective_message.reply_text(message_for_orders_quantity[:4096],parse_mode="HTML")
+        message_for_orders_quantity = message_for_orders_quantity[:4096 - len(total_line)] + total_line
+        await update.effective_message.reply_text(message_for_orders_quantity,parse_mode="HTML")
     await main_menu(update,context)
     return
 
