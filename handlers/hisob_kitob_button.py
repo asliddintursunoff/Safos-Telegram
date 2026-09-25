@@ -27,13 +27,13 @@ async def hisob_kitob_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if text not in valid_buttons:
         # Ignore invalid messages instead of replying
-        return  # Do nothing
+        return ConversationHandler.END
 
     if text == "💰 BUGUNGI ZAKASLARIM PULI":
         result = getting_my_orders_price(telegram_id=telegram_id, today_only=True)
-        total = result.get("total_price", 0) if result else 0
+        total = (result.get("total_price") or 0) if result else 0
         await update.message.reply_text(
-            f"💰 Bugungi zakazlaringizning jami narxi: <b>{total:,}</b> so'm",
+            f"💰 Bugungi zakazlaringizning jami narxi: <b>{total:,.0f}</b> so'm",
             parse_mode="HTML"
         )
         await main_menu(update, context)
@@ -55,9 +55,13 @@ async def hisob_kitob_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif text == "📕Hisobim":
         result = remaining_salary(telegram_id=telegram_id)
-        total = result.get("remaining_salary", 0) if result else 0
+        if result is None:
+            await update.message.reply_text("❌ Serverdan ma'lumot olinmadi. Keyinroq urinib ko'ring.")
+            await main_menu(update, context)
+            return ConversationHandler.END
+        total = result.get("remaining_salary") or 0
         await update.message.reply_text(
-            f"💰 Bugungi zakazlaringizning jami narxi: <b>{total:,}</b> so'm",
+            f"📕 Qolgan maoshingiz: <b>{total:,.0f}</b> so'm",
             parse_mode="HTML"
         )
         await main_menu(update, context)
@@ -103,8 +107,8 @@ async def end_date_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_date=start_date_api, 
         end_date=end_date_api
     )
-    total = result.get("total_price", 0) if result else 0
-    await update.message.reply_text(f"📊 Tanlangan davr bo‘yicha zakazlaringizning jami narxi: <b>{total:,}</b> so'm",parse_mode="HTML")
+    total = (result.get("total_price") or 0) if result else 0
+    await update.message.reply_text(f"📊 Tanlangan davr bo‘yicha zakazlaringizning jami narxi: <b>{total:,.0f}</b> so'm",parse_mode="HTML")
     await main_menu(update, context)
     return ConversationHandler.END
 
@@ -128,24 +132,32 @@ async def which_day_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         telegram_id=telegram_id,
         which_day=which_day
     )
-    total = result.get("total_price", 0) if result else 0
+    total = (result.get("total_price") or 0) if result else 0
 
     await update.message.reply_text(
-        f"📆 {date_text} sanasidagi zakazlaringizning jami narxi: <b>{total:,}</b> so'm",parse_mode="HTML"
+        f"📆 {date_text} sanasidagi zakazlaringizning jami narxi: <b>{total:,.0f}</b> so'm",parse_mode="HTML"
     )
     await main_menu(update, context)
     return ConversationHandler.END
 
 
 from telegram.ext import CommandHandler
+
+
+async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await main_menu(update, context)
+    return ConversationHandler.END
+
+NOT_BACK = ~filters.Regex("^⬅️ Ortga$")
 valid_buttons = ["💰 BUGUNGI ZAKASLARIM PULI", "📆BELGILANGAN SANADAGI", "📊 SANA ORALIG'IDAGI", "⬅️ Ortga", "📕Hisobim"]
 
 hisob_kitob_conv = ConversationHandler(
     entry_points=[MessageHandler(filters.Regex(f"^({'|'.join(valid_buttons)})$"), hisob_kitob_handler)],
     states={
-        ASK_START_DATE: [MessageHandler(filters.TEXT & (~filters.COMMAND), start_date_handler)],
-        ASK_END_DATE: [MessageHandler(filters.TEXT & (~filters.COMMAND), end_date_handler)],
-        ASK_WHICH_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, which_day_handler)],
+        ASK_START_DATE: [MessageHandler(filters.TEXT & (~filters.COMMAND) & NOT_BACK, start_date_handler)],
+        ASK_END_DATE: [MessageHandler(filters.TEXT & (~filters.COMMAND) & NOT_BACK, end_date_handler)],
+        ASK_WHICH_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND & NOT_BACK, which_day_handler)],
     },
-    fallbacks=[CommandHandler("cancel", lambda u,c: ConversationHandler.END)],
+    fallbacks=[CommandHandler("cancel", _cancel)],
+    allow_reentry=True,
 )

@@ -1,22 +1,21 @@
-from telegram import Update, ReplyKeyboardMarkup,CopyTextButton
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
+from services.profile import get_profile
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    agent = context.user_data.get("agent")
+    agent = await get_profile(update, context, refresh=True)
     if not agent:
-        await update.message.reply_text("You must register first with /start")
+        await update.effective_message.reply_text("You must register first with /start")
         return
 
-    if agent["role"] == "agent":
-        buttons = [["📝Buyurtma📝"],["🧮Hisob-Kitob"]]
-    elif agent["role"] == "dostavchik":
+    role = agent.get("role")
+    if role == "dostavchik":
         buttons = [["📝Buyurtma📝"], ["📦 Mavjud zakaslar"],["🧮Hisob-Kitob"]]
 
-    elif agent["role"] == "admin":
+    elif role == "admin":
         buttons = [["📝Buyurtma📝"],["📦 Mavjud zakaslar"],["👤Admin👤"],["🧮Hisob-Kitob"]]
+    else:
+        buttons = [["📝Buyurtma📝"],["🧮Hisob-Kitob"]]
 
     reply_markup = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-    await update.message.reply_text("Siz bosh menyudasiz!\nTugmalardan birini tanlang:", reply_markup=reply_markup)
-
-    
-
+    await update.effective_message.reply_text("Siz bosh menyudasiz!\nTugmalardan birini tanlang:", reply_markup=reply_markup)

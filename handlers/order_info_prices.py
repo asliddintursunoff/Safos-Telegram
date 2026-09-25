@@ -55,7 +55,7 @@ async def zakaz_hisobot_action(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if text == "📆 Bugun":
         result = get_total_orders_price_today(update.effective_user.id)
-        total = result.get("total_price", 0) if isinstance(result, dict) else result
+        total = (result.get("total_price") or 0) if isinstance(result, dict) else (result or 0)
         await update.message.reply_text(
             f"📅 Bugungi zakazlar umumiy summasi: 💰 {total:,.0f} so‘m"
         )
@@ -79,7 +79,7 @@ async def zakaz_hisobot_by_date(update: Update, context: ContextTypes.DEFAULT_TY
         return ZAKAZ_HISOBOT_DATE
 
     result = get_total_orders_price_by_date(update.effective_user.id, converted)
-    total = result.get("total_price", 0) if isinstance(result, dict) else result
+    total = (result.get("total_price") or 0) if isinstance(result, dict) else (result or 0)
     await update.message.reply_text(
         f"📅 {date_str} sanasidagi zakazlar summasi: 💰 {total:,.0f} so‘m"
     )
@@ -112,7 +112,7 @@ async def zakaz_hisobot_end_date(update: Update, context: ContextTypes.DEFAULT_T
     start_display = context.user_data.get("start_date_display")
 
     result = get_total_orders_price_between(update.effective_user.id, start_date, converted)
-    total = result.get("total_price", 0) if isinstance(result, dict) else result
+    total = (result.get("total_price") or 0) if isinstance(result, dict) else (result or 0)
 
     await update.message.reply_text(
         f"📊 {start_display} dan {date_str} gacha bo‘lgan zakazlar summasi: 💰 {total:,.0f} so‘m"
@@ -120,16 +120,23 @@ async def zakaz_hisobot_end_date(update: Update, context: ContextTypes.DEFAULT_T
     return ConversationHandler.END
 
 
+async def zakaz_hisobot_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await admin_menu(update, context)
+    return ConversationHandler.END
+
+
+NOT_BACK = ~filters.Regex("^⬅️ Ortga$")
+
 # 🧭 Conversation handler
 zakaz_hisobot_conv_handler = ConversationHandler(
     entry_points=[MessageHandler(filters.Regex("^💰 Zakaz hisobot$"), zakaz_hisobot_start)],
     states={
         ZAKAZ_HISOBOT_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, zakaz_hisobot_action)],
-        ZAKAZ_HISOBOT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, zakaz_hisobot_by_date)],
-        ZAKAZ_HISOBOT_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, zakaz_hisobot_start_date)],
-        ZAKAZ_HISOBOT_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, zakaz_hisobot_end_date)],
+        ZAKAZ_HISOBOT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND & NOT_BACK, zakaz_hisobot_by_date)],
+        ZAKAZ_HISOBOT_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND & NOT_BACK, zakaz_hisobot_start_date)],
+        ZAKAZ_HISOBOT_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND & NOT_BACK, zakaz_hisobot_end_date)],
     },
-    fallbacks=[MessageHandler(filters.Regex("^⬅️ Ortga$"), admin_menu)],
+    fallbacks=[MessageHandler(filters.Regex("^⬅️ Ortga$"), zakaz_hisobot_back)],
     allow_reentry=True
 )
 

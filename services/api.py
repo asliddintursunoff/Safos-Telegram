@@ -1,132 +1,145 @@
-import requests
-from config import API_URL
 import logging
-def verify_telegram(phone_number:str,telegram_id:int):
-    response = requests.post(url=f"{API_URL}/agents/verify-telegram",
-                            json={
-                                
-                                "phone_number": phone_number,
-                                "telegram_id": telegram_id
-                                    
-                            })
-    if response.status_code == 200:
+from typing import Optional
+
+import requests
+
+from config import API_URL, BACKEND_API_KEY
+
+logger = logging.getLogger(__name__)
+
+# one connection pool for all calls + a timeout: without a timeout a single slow request
+# blocks the whole bot for every user
+_session = requests.Session()
+TIMEOUT = 15
+
+
+def _request(method: str, path: str, telegram_id=None, **kwargs) -> Optional[requests.Response]:
+    headers = kwargs.pop("headers", {}) or {}
+    if telegram_id is not None:
+        headers["x-telegram-id"] = str(telegram_id)
+    if BACKEND_API_KEY:
+        headers["x-api-key"] = BACKEND_API_KEY
+    try:
+        return _session.request(method, f"{API_URL}{path}", headers=headers, timeout=TIMEOUT, **kwargs)
+    except requests.RequestException:
+        logger.exception("Backend request failed: %s %s", method, path)
+        return None
+
+
+def _json_or(response: Optional[requests.Response], default=None):
+    if response is None or response.status_code != 200:
+        return default
+    try:
         return response.json()
-    return None
+    except ValueError:
+        return default
 
 
+def _error(response: Optional[requests.Response]) -> dict:
+    detail = None
+    if response is not None:
+        try:
+            detail = response.json().get("detail")
+        except (ValueError, AttributeError):
+            detail = None
+    return {
+        "error": True,
+        "status_code": response.status_code if response is not None else None,
+        "detail": detail,
+    }
 
+
+def verify_telegram(phone_number:str,telegram_id:int):
+    response = _request("POST", "/agents/verify-telegram",
+                        json={"phone_number": phone_number, "telegram_id": telegram_id})
+    return _json_or(response)
+
+
+def get_me(telegram_id: int):
+    """Profile (id, role, names) of this Telegram user from the backend, or None."""
+    return _json_or(_request("GET", "/agents/me", telegram_id))
 
 
 def create_order(order,telegram_id):
-    response = requests.post(url=f"{API_URL}/orders/",
-                            json=order,
-                            headers={
-                                "x-telegram-id":f"{telegram_id}"
-                            })
-
-    if response.status_code == 200:
+    response = _request("POST", "/orders/", telegram_id, json=order)
+    if response is not None and response.status_code == 200:
         return response.json()
-    print("❌ Order creation failed:", response.text)
+    logger.error("❌ Order creation failed: %s", response.text if response is not None else "no response")
     return None
 
 
 #getting orders
 def get_new_orders(telegram_id:int):
-    response = requests.get(url=f"{API_URL}/orders/",
-                            headers={
-                                "x-telegram-id":f"{telegram_id}"
-                            })
-    
-    if response.status_code ==200:
-        return response.json()
-    print("❌ Order getting failed:", response.text)
-    return "Getting order is failed!"
+    """List of existing orders, or None if the backend failed."""
+    response = _request("GET", "/orders/", telegram_id)
+    data = _json_or(response)
+    if data is None:
+        logger.error("❌ Order getting failed: %s", response.text if response is not None else "no response")
+    return data
 
 def calculating_new_orders_quantity():
-    response = requests.get(url=f"{API_URL}/orders/calculating-existing-orders")
-                            
-    
-    if response.status_code ==200:
-        return response.json()
-    print("❌ Order getting failed:", response.text)
-    return "Yangi Zakaz mavjud emas"
-    
+    """{product: "qty unit"} or None."""
+    return _json_or(_request("GET", "/orders/calculating-existing-orders"))
+
 def get_order_by_id(order_id: int, telegram_id: int):
-    response = requests.get(
-        url=f"{API_URL}/orders/{order_id}",
-        headers={"x-telegram-id": f"{telegram_id}"}
-    )
-    if response.status_code == 200:
-        data = response.json()
-        logging.info(f"Order {order_id} data: {data}")
-        return data
-    logging.error(f"❌ Order getting failed: {response.text}")
-    return None
+    response = _request("GET", f"/orders/{order_id}", telegram_id)
+    data = _json_or(response)
+    if data is None:
+        logger.info("Order %s not available for %s: %s", order_id, telegram_id,
+                    response.status_code if response is not None else "no response")
+    return data
 
 
 def update_order(order_id: int, telegram_id: int, order_data: dict):
-    response = requests.put(
-        f"{API_URL}/orders/{order_id}",
-        headers={"x-telegram-id": str(telegram_id)},
-        json=order_data
-    )
-    return response.json() if response.status_code == 200 else None
+    """Updated order dict, or {"error": True, "status_code": ..., "detail": ...}."""
+    response = _request("PUT", f"/orders/{order_id}", telegram_id, json=order_data)
+    if response is not None and response.status_code == 200:
+        return response.json()
+    return _error(response)
 
 
 def patch_update_order(order_id: int, telegram_id: int, order_data: dict):
-    response = requests.patch(
-        f"{API_URL}/orders/patch/{order_id}",
-        headers={"x-telegram-id": str(telegram_id)},
-        json=order_data
-    )
-    return response.json() if response.status_code == 200 else "Backendda xatolik bor!"
+    response = _request("PATCH", f"/orders/patch/{order_id}", telegram_id, json=order_data)
+    return _json_or(response, "Backendda xatolik bor!")
 
 
 
 def delete_order(order_id: int, telegram_id: int):
-    response = requests.delete(
-        f"{API_URL}/orders/{order_id}",
-        headers={"x-telegram-id": str(telegram_id)}
-    )
-    if response.status_code == 200:
+    response = _request("DELETE", f"/orders/{order_id}", telegram_id)
+    if response is not None and response.status_code == 200:
         try:
             return response.json()
         except ValueError:
             return {}
-    return {"error": True, "status_code": response.status_code}
+    return _error(response)
 
 
 
 def approve_order(order_id: int, telegram_id: int):
-    response = requests.post(
-        f"{API_URL}/orders/{order_id}/approve",
-        headers={"x-telegram-id": str(telegram_id)}
-    )
-    return response.json() if response.status_code == 200 else None
+    response = _request("POST", f"/orders/{order_id}/approve", telegram_id)
+    if response is not None and response.status_code == 200:
+        return response.json()
+    return _error(response) if response is not None and response.status_code == 403 else None
 
 def disapprove_order(order_id: int, telegram_id: int):
-    response = requests.post(
-        f"{API_URL}/orders/{order_id}/disapprove",
-        headers={"x-telegram-id": str(telegram_id)}
-    )
-    return response.json() if response.status_code == 200 else None
+    response = _request("POST", f"/orders/{order_id}/disapprove", telegram_id)
+    if response is not None and response.status_code == 200:
+        return response.json()
+    return _error(response) if response is not None and response.status_code == 403 else None
 
 def delivered_order(order_id: int, is_delivered: bool, telegram_id: int):
-    response = requests.post(
-        f"{API_URL}/orders/{order_id}/delivered",
-        headers={"x-telegram-id": str(telegram_id)},
-        params={"is_delivered": str(is_delivered).lower()}
-    )
-    if response.status_code == 200:
+    response = _request("POST", f"/orders/{order_id}/delivered", telegram_id,
+                        params={"is_delivered": str(is_delivered).lower()})
+    if response is not None and response.status_code == 200:
         try:
             return response.json()
         except ValueError:
             return {}
-    return {"error": True, "status_code": response.status_code}
+    return _error(response)
 
 
 def getting_my_orders_price(
-    telegram_id: int, 
+    telegram_id: int,
     which_day:str = None,
     start_date: str = None,  # format "YYYY-MM-DD"
     end_date: str = None,
@@ -146,24 +159,12 @@ def getting_my_orders_price(
     if today_only:
         payload["today_only"] = True
 
-    response = requests.get(
-        f"{API_URL}/agents/my-orders-total-price",
-        headers={"x-telegram-id": str(telegram_id)},
-        params=payload
-    )
-    if response.status_code == 200:
-        return response.json()
-    return None
+    return _json_or(_request("GET", "/agents/my-orders-total-price", telegram_id, params=payload))
 
 
-from typing import Optional
 def remaining_salary(telegram_id: int,agents_id:Optional[int] = None):
-    response = requests.get(
-        f"{API_URL}/agents/salary/",
-        headers={"x-telegram-id": str(telegram_id)},
-        params={"agents_id": agents_id}
-    )
-    return response.json() if response.status_code == 200 else None
+    params = {"agent_id": agents_id} if agents_id is not None else {}
+    return _json_or(_request("GET", "/agents/salary", telegram_id, params=params))
 
 
 
@@ -171,49 +172,28 @@ def remaining_salary(telegram_id: int,agents_id:Optional[int] = None):
 #################
 #products API
 def get_products(telegram_id: int):
-    response = requests.get(
-        url=f"{API_URL}/products/",
-        headers={"x-telegram-id": f"{telegram_id}"}
-    )
-    if response.status_code == 200:
-        products = response.json()
-        logging.info(f"Products retrieved: {products}")
+    response = _request("GET", "/products/", telegram_id)
+    products = _json_or(response)
+    if isinstance(products, list):
         return products
-    logging.error(f"❌ Product retrieval failed: {response.text}")
+    logger.error("❌ Product retrieval failed: %s", response.text if response is not None else "no response")
     return []
 
 
 def creating_product(telegram_id:int,name:str,price:float,unit:str):
-    response = requests.post(
-        f"{API_URL}/products/create",
-        headers={"x-telegram-id": str(telegram_id)},
-        json={"name": name,
-              "price":int(price),
-              "unit":unit.strip().lower()}
-    )
-    return response.json() if response.status_code == 200 else None
-    
+    return _json_or(_request("POST", "/products/create", telegram_id,
+                             json={"name": name, "price": int(price), "unit": unit.strip().lower()}))
+
 
 
 def update_product(telegram_id:int,products_id:int,name:str,price:float,unit:str):
-    response = requests.put(
-        f"{API_URL}/products/update/{products_id}",
-        headers={"x-telegram-id": str(telegram_id)},
-        json={"name": name,
-              "price":price,
-              "unit":unit}
-    )
-    return response.json() if response.status_code == 200 else None
-    
+    return _json_or(_request("PUT", f"/products/update/{products_id}", telegram_id,
+                             json={"name": name, "price": price, "unit": unit}))
+
 
 def delete_product(telegram_id:int,product_id:int):
-    response = requests.delete(
-        f"{API_URL}/products/delete/{product_id}",
-        headers={"x-telegram-id": str(telegram_id)},
-        
-    )
-    return response.json() if response.status_code == 200 else None
-    
+    return _json_or(_request("DELETE", f"/products/delete/{product_id}", telegram_id))
+
 #####
 
 
@@ -221,71 +201,39 @@ def delete_product(telegram_id:int,product_id:int):
 #agents apis
 
 def getting_all_agents(telegram_id:int):
-    response = requests.get(
-        f"{API_URL}/agents/all",
-        headers={"x-telegram-id": str(telegram_id)},
-        
-    )
-    return response.json() if response.status_code == 200 else None
+    return _json_or(_request("GET", "/agents/all", telegram_id))
 
 def getting_one_agent(telegram_id:int,agent_id:int):
-    response = requests.get(
-        f"{API_URL}/agents/{agent_id}",
-        headers={"x-telegram-id": str(telegram_id)},
-        
-    )
-    return response.json() if response.status_code == 200 else None
+    return _json_or(_request("GET", f"/agents/{agent_id}", telegram_id))
+
 def deleting_agent(telegram_id:int,agent_id:int):
-    response = requests.delete(
-        f"{API_URL}/agents/delete/{agent_id}",
-        headers={"x-telegram-id": str(telegram_id)},
-        
-    )
-    return response.json() if response.status_code == 200 else None
+    return _json_or(_request("DELETE", f"/agents/delete/{agent_id}", telegram_id))
+
 def updating_agent(telegram_id:int,agent_id:int,first_name:str,last_name:str,phone_number:str,percentage:int,role:str):
-    response = requests.put(
-        f"{API_URL}/agents/update/{agent_id}",
-        headers={"x-telegram-id": str(telegram_id)},
-        json={
-            "first_name":first_name,
-            "last_name":last_name,
-            "phone_number":phone_number,
-            "percentage":float(percentage),
-            "role":role
-        }
-        
-    )
-    return response.json() if response.status_code == 200 else None
+    return _json_or(_request("PUT", f"/agents/update/{agent_id}", telegram_id, json={
+        "first_name":first_name,
+        "last_name":last_name,
+        "phone_number":phone_number,
+        "percentage":float(percentage),
+        "role":role
+    }))
+
 def creating_agent(telegram_id:int,first_name:str,last_name:str,phone_number:str,percentage:int,role:str):
-    response = requests.post(
-        f"{API_URL}/agents/create",
-        headers={"x-telegram-id": str(telegram_id)},
-        json={
-            "first_name":first_name,
-            "last_name":last_name,
-            "phone_number":phone_number,
-            "percentage":float(percentage),
-            "role":role
-        }
-        
-    )
-    return response.json() if response.status_code == 200 else None
+    return _json_or(_request("POST", "/agents/create", telegram_id, json={
+        "first_name":first_name,
+        "last_name":last_name,
+        "phone_number":phone_number,
+        "percentage":float(percentage),
+        "role":role
+    }))
 
 def adding_salary(telegram_id:int,agent_id:int,salary_amount:int):
-    response = requests.post(
-        f"{API_URL}/agents/add-salary/{agent_id}",
-        headers={"x-telegram-id": str(telegram_id)},
-        json={
-            "salary_amount":salary_amount,
-            
-        }
-        
-    )
-    return response.json() if response.status_code == 200 else None
+    return _json_or(_request("POST", f"/agents/add-salary/{agent_id}", telegram_id,
+                             json={"salary_amount": salary_amount}))
 
 
 def get_users_salary(
-    telegram_id: int, 
+    telegram_id: int,
     agent_id:int,
     which_day:str = None,
     start_date: str = None,  # format "YYYY-MM-DD"
@@ -308,14 +256,7 @@ def get_users_salary(
     if today_only:
         payload["today_only"] = True
 
-    response = requests.get(
-        f"{API_URL}/agents/taking-users-price-with-id",
-        headers={"x-telegram-id": str(telegram_id)},
-        params=payload
-    )
-    if response.status_code == 200:
-        return response.json()
-    return None
+    return _json_or(_request("GET", "/agents/taking-users-price-with-id", telegram_id, params=payload))
 
 
 
@@ -323,25 +264,18 @@ def get_users_salary(
 
 
 def get_total_orders_price_today(telegram_id):
-    r = requests.get(
-        f"{API_URL}/orders/total-price",
-        params={"today_only": "true"},
-        headers={"x-telegram-id": str(telegram_id)}
-    )
-    return r.json()
+    return _json_or(_request("GET", "/orders/total-price", telegram_id, params={"today_only": "true"}), {})
 
 def get_total_orders_price_by_date(telegram_id, date_str):
-    r = requests.get(
-        f"{API_URL}/orders/total-price",
-        params={"which_day": f"{date_str}T00:00:00"},
-        headers={"x-telegram-id": str(telegram_id)}
-    )
-    return r.json()
+    return _json_or(_request("GET", "/orders/total-price", telegram_id,
+                             params={"which_day": f"{date_str}T00:00:00"}), {})
 
 def get_total_orders_price_between(telegram_id, start_str, end_str):
-    r = requests.get(
-        f"{API_URL}/orders/total-price",
-        params={"start_date": f"{start_str}T00:00:00", "end_date": f"{end_str}T23:59:59"},
-        headers={"x-telegram-id": str(telegram_id)}
-    )
-    return r.json()
+    return _json_or(_request("GET", "/orders/total-price", telegram_id,
+                             params={"start_date": f"{start_str}T00:00:00", "end_date": f"{end_str}T23:59:59"}), {})
+
+
+### agent earnings (admin panel)
+
+def get_agents_earnings(telegram_id, **params):
+    return _json_or(_request("GET", "/agents/earnings", telegram_id, params=params), {})

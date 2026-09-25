@@ -43,7 +43,7 @@ def get_order_print_url(order):
 
     lines.append("\n")  # spacing between humans and time
 
-    for_who = order.get("for_who", "Noma’lum")
+    for_who = order.get("for_who") if order.get("for_who") is not None else "Noma’lum"
     lines.append(bold_on + "Buyurtma egasi: " + bold_off + f"{for_who}\n")
 
     if order.get("order_date"):
@@ -66,7 +66,9 @@ def get_order_print_url(order):
 
     # ===== PRODUCT ROWS =====
     total = 0
-    for item in order.get("items", []):
+    for item in order.get("items") or []:
+        if not item.get("product"):
+            continue
         product_name = item["product"]["name"][:name_w]
         price = int(item["product"]["price"])
         qty = int(item["quantity"])

@@ -37,7 +37,7 @@ async def agents_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += (
             f"🆔 <b>{agent['id']}</b> | "
             f"👤 {agent['first_name']} {agent['last_name']}\n"
-            f"🪙 Qolgan maosh: <b>{agent['remaining_salary']:,} so'm</b>\n"
+            f"🪙 Qolgan maosh: <b>{(agent.get('remaining_salary') or 0):,.0f} so'm</b>\n"
             f"🧭 Rol: <b>{agent['role']}</b>\n\n"
         )
 
@@ -59,6 +59,9 @@ async def agents_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def choose_agent_for_salary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     agents = getting_all_agents(telegram_id)
+    if not agents:
+        await update.message.reply_text("📭 Agentlar topilmadi yoki serverda xatolik.")
+        return AGENT_ACTION
 
     keyboard = [
         [InlineKeyboardButton(f"{a['first_name']} {a['last_name']}", callback_data=f"agent_salary:{a['id']}")]
@@ -110,8 +113,8 @@ async def salary_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return INPUT_SALARY_AMOUNT
     elif action == "⬅️ Ortga":
         # 🔙 go back to agent list or admin menu
-        await agents_entry(update, context)
-        return AGENT_ACTION
+        return await agents_entry(update, context)
+    return SELECT_SALARY_ACTION
 
 
 def validate_date(date_str: str) -> datetime:
@@ -123,9 +126,17 @@ def validate_date(date_str: str) -> datetime:
 async def get_salary_for_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_input = update.message.text
     telegram_id = update.effective_user.id
-    agent_id = context.user_data["selected_agent_id"]
+    agent_id = context.user_data.get("selected_agent_id")
+    if agent_id is None:
+        return await agents_entry(update, context)
 
     # 📅 Determine which query to use
+    if date_input == "📊 Oraliqdagi sana":
+        await update.message.reply_text("📅 Sanani kiriting (masalan: 12-10-2025):")
+        return INPUT_DATE
+    if date_input == "📅 Sana":
+        await update.message.reply_text("📅 Sanani kiriting (masalan: 12-10-2025):")
+        return INPUT_DATE
     if date_input == "📆 Bugun":
         result = get_users_salary(telegram_id, agent_id, today_only=True)
     else:
@@ -154,10 +165,12 @@ async def get_salary_for_date(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def add_salary_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
-    agent_id = context.user_data["selected_agent_id"]
+    agent_id = context.user_data.get("selected_agent_id")
+    if agent_id is None:
+        return await agents_entry(update, context)
 
     try:
-        amount = int(update.message.text)
+        amount = int(update.message.text.replace(" ", "").replace(",", ""))
         response = adding_salary(telegram_id, agent_id, amount)
         if response:
             await update.message.reply_text(f"✅ {amount:,} so‘m agentga qo‘shildi.")
@@ -224,6 +237,12 @@ async def create_agent_role(update, context):
     telegram_id = update.effective_user.id
     data = context.user_data
     role = update.message.text
+    if role not in ("agent", "dostavchik"):
+        await update.message.reply_text("🧭 Rolni tugma orqali tanlang:", reply_markup=ReplyKeyboardMarkup([["agent"], ["dostavchik"]], resize_keyboard=True))
+        return CREATE_AGENT_ROLE
+    if not all(k in data for k in ("first_name", "last_name", "phone_number", "percentage")):
+        await update.message.reply_text("❌ Ma'lumotlar yo'qoldi, qaytadan boshlang.")
+        return await go_back_to_admin(update, context)
 
     response = creating_agent(
         telegram_id,
@@ -243,6 +262,9 @@ async def create_agent_role(update, context):
 async def select_agent_to_update(update, context):
     telegram_id = update.effective_user.id
     agents = getting_all_agents(telegram_id)
+    if not agents:
+        await update.message.reply_text("📭 Agentlar topilmadi yoki serverda xatolik.")
+        return CRUD_ACTION
     keyboard = [
         [InlineKeyboardButton(f"{a['first_name']} {a['last_name']}", callback_data=f"update:{a['id']}")]
         for a in agents
@@ -291,10 +313,15 @@ async def update_field(update, context):
 from services.api import getting_one_agent
 async def update_agent_field(update, context):
     telegram_id = update.effective_user.id
-    agent_id = context.user_data["update_agent_id"]
-    field = context.user_data["update_field"]
-    field_label = context.user_data["update_field_label"]
+    agent_id = context.user_data.get("update_agent_id")
+    field = context.user_data.get("update_field")
+    field_label = context.user_data.get("update_field_label")
     new_value = update.message.text
+    if agent_id is None or field is None:
+        return await crud_menu(update, context)
+    if field == "role" and new_value not in ("agent", "dostavchik", "admin"):
+        await update.message.reply_text("❌ Rol faqat: agent, dostavchik yoki admin")
+        return UPDATE_VALUE
 
     # Convert percentage to number if needed
     if field == "percentage":
@@ -354,6 +381,9 @@ async def update_agent_field(update, context):
 async def select_agent_to_delete(update, context):
     telegram_id = update.effective_user.id
     agents = getting_all_agents(telegram_id)
+    if not agents:
+        await update.message.reply_text("📭 Agentlar topilmadi yoki serverda xatolik.")
+        return CRUD_ACTION
     keyboard = [[InlineKeyboardButton(f"{a['first_name']} {a['last_name']}", callback_data=f"delete:{a['id']}")] for a in agents]
     await update.message.reply_text("🗑 O‘chirish uchun agentni tanlang:", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_AGENT_DELETE
@@ -386,8 +416,8 @@ agent_conv_handler = ConversationHandler(
         # 💰 Salary flow
         SELECT_AGENT_FOR_SALARY: [CallbackQueryHandler(agent_salary_callback, pattern="^agent_salary:")],
         SELECT_SALARY_ACTION: [MessageHandler(filters.TEXT, salary_actions)],
-        INPUT_DATE: [MessageHandler(filters.TEXT, get_salary_for_date)],
-        INPUT_SALARY_AMOUNT: [MessageHandler(filters.TEXT, add_salary_amount)],
+        INPUT_DATE: [MessageHandler(filters.TEXT & ~filters.Regex("(?i)^⬅️ *Ortga$"), get_salary_for_date)],
+        INPUT_SALARY_AMOUNT: [MessageHandler(filters.TEXT & ~filters.Regex("(?i)^⬅️ *Ortga$"), add_salary_amount)],
 
         # ➕🗑✏️ CRUD main menu
         CRUD_ACTION: [
@@ -397,11 +427,11 @@ agent_conv_handler = ConversationHandler(
         ],
 
         # ➕ Create flow
-        CREATE_AGENT_FIRST: [MessageHandler(filters.TEXT, create_agent_first)],
-        CREATE_AGENT_LAST: [MessageHandler(filters.TEXT, create_agent_last)],
-        CREATE_AGENT_PHONE: [MessageHandler(filters.TEXT, create_agent_phone)],
-        CREATE_AGENT_PERCENT: [MessageHandler(filters.TEXT, create_agent_percent)],
-        CREATE_AGENT_ROLE: [MessageHandler(filters.TEXT, create_agent_role)],
+        CREATE_AGENT_FIRST: [MessageHandler(filters.TEXT & ~filters.Regex("(?i)^⬅️ *Ortga$"), create_agent_first)],
+        CREATE_AGENT_LAST: [MessageHandler(filters.TEXT & ~filters.Regex("(?i)^⬅️ *Ortga$"), create_agent_last)],
+        CREATE_AGENT_PHONE: [MessageHandler(filters.TEXT & ~filters.Regex("(?i)^⬅️ *Ortga$"), create_agent_phone)],
+        CREATE_AGENT_PERCENT: [MessageHandler(filters.TEXT & ~filters.Regex("(?i)^⬅️ *Ortga$"), create_agent_percent)],
+        CREATE_AGENT_ROLE: [MessageHandler(filters.TEXT & ~filters.Regex("(?i)^⬅️ *Ortga$"), create_agent_role)],
 
         # ✏️ Update flow
         SELECT_AGENT_UPDATE: [CallbackQueryHandler(update_agent_callback, pattern="^update:")],

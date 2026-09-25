@@ -138,8 +138,11 @@ async def update_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if text == "⬅️ Ortga":
         return await products_menu(update, context)
 
+    field_names = {"name": "nomi", "price": "narxi", "unit": "o'lchov birligi"}
+    if text not in field_names:
+        return UPDATE_FIELD
     context.user_data["field_to_update"] = text
-    field_name = {"name": "nomi", "price": "narxi", "unit": "o'lchov birligi"}[text]
+    field_name = field_names[text]
 
     if text == "unit":
         buttons = [["kg", "dona"], ["⬅️ Ortga"]]
@@ -221,7 +224,7 @@ async def delete_product_handler(update: Update, context: ContextTypes.DEFAULT_T
         if result:
             await update.message.reply_text("Mahsulot muvaffaqiyatli o'chirildi.")
         else:
-            await update.message.reply_text("Xatolik yuz berdi, mahsulot o'chirilmadi.")
+            await update.message.reply_text("Xatolik yuz berdi, mahsulot o'chirilmadi.\n(Zakazlarda ishlatilgan mahsulotni o'chirib bo'lmaydi — eski zakazlar summasi yo'qolmasligi uchun.)")
     except (ValueError, IndexError):
         products = get_products(update.effective_user.id)
         buttons = [[f"{p['id']} - {p['name']}"] for p in products] + [["⬅️ Ortga"]]

@@ -1,177 +1,132 @@
-# Replace your existing callback_handler with this function
 from telegram import Update
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.error import BadRequest
+from telegram.ext import ContextTypes
 from formatter.order_post import format_order_message
-from keyboards.inline import get_order_buttons
-from .order import ASK_WHO, ask_for_who
+from keyboards.inline import get_order_buttons, get_delete_confirm_buttons
 import logging
 from services.api import (
     delivered_order, approve_order, disapprove_order,
-    delete_order, get_order_by_id, patch_update_order
+    delete_order, get_order_by_id,
 )
-from services.chanel import delete_message_in_channel, edit_message_in_channel
+from services.chanel import delete_message_in_channel, edit_message_in_channel, safe_edit_message
 
 logger = logging.getLogger(__name__)
+
+
+async def _refresh_messages(query, context, order_id, clicker_id):
+    """Show the new state on the clicked message, the owner's message and the channel post."""
+    updated_order = get_order_by_id(order_id, clicker_id)
+    if not updated_order:
+        await query.message.reply_text("❌ Bu zakaz allaqachon o‘chirilgan!")
+        return
+    new_text = format_order_message(updated_order)
+    user_markup = get_order_buttons(updated_order)
+    channel_markup = get_order_buttons(updated_order, channel_mode=True)
+
+    is_channel_post = str(query.message.chat_id) == str(updated_order.get("channel_chat_id")) \
+        and str(query.message.message_id) == str(updated_order.get("channel_message_id"))
+    await safe_edit_message(context.bot, query.message.chat_id, query.message.message_id, new_text,
+                            channel_markup if is_channel_post else user_markup)
+    await edit_message_in_channel(context.bot, updated_order, new_text, user_markup, channel_markup)
+
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query or not query.data:
         return
 
-    # answer quickly to clear UI spinner
-    await query.answer()
-
     parts = query.data.split("_")
     if len(parts) < 3:
-        await query.message.reply_text("❌ Noto'g'ri callback ma'lumotlari.")
-        return ConversationHandler.END
+        await query.answer("❌ Noto'g'ri callback ma'lumotlari.", show_alert=True)
+        return
 
     action = parts[1]
+    if action == "edit":
+        # handled by the order conversation (handlers/order.py)
+        return
+
     try:
         order_id = int(parts[2])
     except ValueError:
-        await query.message.reply_text("❌ Noto'g'ri zakaz ID.")
-        return ConversationHandler.END
+        await query.answer("❌ Noto'g'ri zakaz ID.", show_alert=True)
+        return
 
-    # owner_id is optional but if present it's at index 3
-    owner_id = None
-    if len(parts) >= 4 and parts[3].isdigit():
-        owner_id = int(parts[3])
-
+    owner_id = parts[3] if len(parts) >= 4 else "0"
     clicker_id = query.from_user.id
-    logger.info("Callback received: user=%s action=%s order=%s owner=%s data=%s",
-                clicker_id, action, order_id, owner_id, query.data)
+    logger.info("Callback received: user=%s action=%s order=%s data=%s", clicker_id, action, order_id, query.data)
 
-    # If owner_id present and clicker is not owner, attempt to fetch order as clicker.
-    # Backend will only return the order if clicker has permission. If not, block.
-    if owner_id is not None and clicker_id != owner_id:
-        # Try to fetch order as clicker (the backend should return None/403 if not allowed)
-        order_for_clicker = get_order_by_id(order_id, clicker_id)
-        if not order_for_clicker:
-            # polite immediate UI alert
-            await query.answer("🚫 Bu tugma siz uchun emas yoki sizda ruxsat yo'q.", show_alert=True)
-            return ConversationHandler.END
-        # If backend returned order_for_clicker, let clicker proceed (they have permission).
-
-    # Determine the canonical fetch id for order data (prefer owner_id if clicker is owner, else clicker)
-    # This is used when you want the owner-specific view; but for permission-sensitive fetching we already tried above.
-    fetch_id = owner_id if (owner_id is not None and clicker_id == owner_id) else clicker_id
-
-    # Fetch order data (for display / channel actions). For actions we rely on API responses for authorization.
-    order_data = get_order_by_id(order_id, fetch_id)
-    if not order_data and action != "edit":
-        await query.message.reply_text("❌ Bu zakaz allaqachon o‘chirilgan yoki topilmadi!")
-        return ConversationHandler.END
+    # the backend only returns the order if the clicker is allowed to see it
+    order_data = get_order_by_id(order_id, clicker_id)
+    if not order_data:
+        await query.answer("🚫 Zakaz topilmadi yoki sizda ruxsat yo'q.", show_alert=True)
+        return
 
     # ---------- Handle actions ----------
     if action == "delivered":
         # expected callback_data: order_delivered_<order_id>_<owner_id>_<true|false>
-        is_delivered = False
-        if len(parts) >= 5:
-            is_delivered = parts[4] == "true"
+        is_delivered = len(parts) >= 5 and parts[4] == "true"
 
         response = delivered_order(order_id, is_delivered, clicker_id)
-        # API returns e.g. {"error": True, "status_code": 403} on forbidden actions — handle that.
-        if response and response.get("status_code") == 403:
-            await query.message.reply_text("❌ Faqat admin va dostavchik bu funksiyani bajara oladi!")
-            return ConversationHandler.END
-        if response and response.get("status_code") == 400:
-            await query.message.reply_text("❌ Bu zakaz tasdiqlanmagan!")
-            return ConversationHandler.END
-
-        # refresh and update message
-        updated_order = get_order_by_id(order_id, fetch_id)
-        if not updated_order:
-            await query.message.reply_text("❌ Bu zakaz allaqachon o‘chirilgan!")
-            return ConversationHandler.END
-
-        new_text = format_order_message(updated_order)
-        new_markup = get_order_buttons(updated_order)
-
-        if new_text != query.message.text_html or new_markup != query.message.reply_markup:
-            await query.message.edit_text(text=new_text, parse_mode="HTML", reply_markup=new_markup)
-            edit_message_in_channel(updated_order, new_text, get_order_buttons(updated_order, channel_mode=True))
-        else:
-            logger.warning("%s raqamli zakaz uchun hech qanday o'zgaritish bo'lmadi.", order_id)
-            await query.message.reply_text("⚠️ zakaz uchun hech qanday o'zgaritish bo'lmadi.")
+        status = response.get("status_code") if response and response.get("error") else None
+        if status == 403:
+            await query.answer("❌ Faqat admin va dostavchik bu funksiyani bajara oladi!", show_alert=True)
+            return
+        if status == 400:
+            await query.answer("❌ Bu zakaz tasdiqlanmagan!", show_alert=True)
+            return
+        if status:
+            await query.answer("❌ Serverda xatolik, qaytadan urinib ko'ring.", show_alert=True)
+            return
+        await query.answer("✅ Saqlandi")
+        await _refresh_messages(query, context, order_id, clicker_id)
 
     elif action == "approve":
         # expected: order_approve_<order_id>_<owner_id>_<approve|disapprove>
-        action_type = None
-        if len(parts) >= 5:
-            action_type = parts[4]
-
+        action_type = parts[4] if len(parts) >= 5 else None
         if action_type not in ("approve", "disapprove"):
-            await query.message.reply_text("❌ Noto'g'ri approve tugmasi.")
-            return ConversationHandler.END
+            await query.answer("❌ Noto'g'ri approve tugmasi.", show_alert=True)
+            return
 
         response = approve_order(order_id, clicker_id) if action_type == "approve" else disapprove_order(order_id, clicker_id)
         if response and response.get("status_code") == 403:
-            await query.message.reply_text("❌ Faqat admin va dostavchik bu funksiyani bajara oladi!.")
-            return ConversationHandler.END
+            await query.answer("❌ Faqat admin va dostavchik bu funksiyani bajara oladi!.", show_alert=True)
+            return
         if not response:
-            await query.message.reply_text("❌ Serverdan noto'g'ri javob olindi.")
-            return ConversationHandler.END
-
-        updated_order = get_order_by_id(order_id, fetch_id)
-        if not updated_order:
-            await query.message.reply_text("❌ Bu zakaz allaqachon o‘chirilgan!")
-            return ConversationHandler.END
-
-        new_text = format_order_message(updated_order)
-        new_markup = get_order_buttons(updated_order)
-
-        if new_text != query.message.text_html or new_markup != query.message.reply_markup:
-            await query.message.edit_text(text=new_text, parse_mode="HTML", reply_markup=new_markup)
-            edit_message_in_channel(updated_order, new_text, get_order_buttons(updated_order, channel_mode=True))
-        else:
-            logger.warning("%s raqamli zakaz uchun hech qanday o'zgaritish bo'lmadi.", order_id)
-            await query.message.reply_text("⚠️ zakaz uchun hech qanday o'zgaritish bo'lmadi.")
+            await query.answer("❌ Serverdan noto'g'ri javob olindi.", show_alert=True)
+            return
+        await query.answer("✅ Saqlandi")
+        await _refresh_messages(query, context, order_id, clicker_id)
 
     elif action == "delete":
-        response = delete_order(order_id, clicker_id)
-        # If backend returns 403 or error - show message
-        if response and response.get("status_code") == 403:
-            await query.message.reply_text("🚫 Siz bu buyurtmani o‘chira olmaysiz.")
-            return ConversationHandler.END
-        if response and response.get("error"):
-            await query.message.reply_text("❌Tizimda xatolik — zakaz o'chirilmadi.")
-            return ConversationHandler.END
-
-        # success: edit message to show deletion and remove in channel
-        await query.message.edit_text(text="🗑️ Zakaz muvaffaqqiyatli o'chirildi.", parse_mode="HTML", reply_markup=None)
+        # ask first: one accidental tap used to delete the order for good
+        await query.answer()
         try:
-            delete_message_in_channel(order_data)
-        except Exception:
-            logger.exception("Xatolik: kanal xabarini o'chirishda muammo yuz berdi.")
-        return ConversationHandler.END
+            await query.message.edit_reply_markup(reply_markup=get_delete_confirm_buttons(order_id, owner_id))
+        except BadRequest:
+            await query.message.reply_text(
+                f"🗑️ {order_id}-zakazni o'chirishni tasdiqlaysizmi?",
+                reply_markup=get_delete_confirm_buttons(order_id, owner_id),
+            )
 
-    elif action == "edit":
-        # For edit: attempt to fetch order as clicker (this checks permission server-side)
-        order_for_clicker = get_order_by_id(order_id, clicker_id)
-        if not order_for_clicker:
-            # clicker not allowed to edit this order
-            await query.answer("🚫 Sizda bu zakazni tahrirlash huquqi yo'q.", show_alert=True)
-            return ConversationHandler.END
+    elif action == "delcancel":
+        await query.answer("Bekor qilindi")
+        await _refresh_messages(query, context, order_id, clicker_id)
 
-        # If order delivered -> cannot edit
-        if order_for_clicker.get("is_delivered"):
-            await query.message.reply_text("⚠️ Bu zakaz allaqachon yetqazib berilgan,buni o'zgartirib bo'lmaydi")
-            return ConversationHandler.END
+    elif action == "delconfirm":
+        response = delete_order(order_id, clicker_id)
+        if response and response.get("status_code") == 403:
+            await query.answer("🚫 Siz bu buyurtmani o‘chira olmaysiz.", show_alert=True)
+            return
+        if response and response.get("error"):
+            await query.answer("❌Tizimda xatolik — zakaz o'chirilmadi.", show_alert=True)
+            return
+        await query.answer("🗑️ O'chirildi")
 
-        # Safe to populate user_data for this clicker
-        context.user_data["agent"] = {"id": order_for_clicker["agent"]["telegram_id"], **order_for_clicker["agent"]}
-        context.user_data["edit_order_id"] = order_id
-        context.user_data["order"] = {
-            "for_who": order_for_clicker["for_who"],
-            "items": [
-                {"product_id": item["product"]["id"], "quantity": item["quantity"]}
-                for item in order_for_clicker["items"]
-            ]
-        }
+        try:
+            await query.message.edit_text(text="🗑️ Zakaz muvaffaqqiyatli o'chirildi.", parse_mode="HTML", reply_markup=None)
+        except BadRequest:
+            pass
+        await delete_message_in_channel(context.bot, order_data)
 
-        await query.message.reply_text(f"✏️ Edit products for order #{order_id}:")
-        # Start the conversation flow (ask_for_who supports callback or message)
-        return await ask_for_who(update=update, context=context)
-
-    return ConversationHandler.END
+    else:
+        await query.answer()
